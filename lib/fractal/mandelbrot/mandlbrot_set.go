@@ -5,6 +5,8 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"runtime"
+	"sync"
 	"time"
 )
 
@@ -13,35 +15,76 @@ type ComplexPoint struct {
 	x, y float64
 }
 
+type PositionParameters struct {
+	kx, ky, centx, centy float64
+}
+
+//TODO AW: move parameters to a dedicated package
 type Parameters struct {
 	depth int
 	zoom float64
 	rph, gph, bph float64 // Phases for RGB channels
 	rfr, gfr, bfr float64 // Frequencies for RGB channels
-	kx, ky float64
-	centx, centy float64
+	kx, ky, centx, centy float64 // position
+
+	position chan PositionParameters // buffered (1) channel for position params
+}
+
+func (p *Parameters) Zoom(w, h, x, y, delta float32) {
+	var mult float64 = 1.1
+	if delta < 0 {
+		mult = 0.9
+	}
+
+	p.zoom = p.zoom / mult
+	mouseX := float64(x / w) * (p.kx * 2) + p.centx - p.kx
+	mouseY := float64(y / h) * (p.ky * 2) + p.centy - p.ky
+	xMax := (p.centx - p.kx) * mult + mouseX * (1 - mult)
+	xMin := (p.centx + p.kx) * mult + mouseX * (1 - mult)
+	yMax := (p.centy - p.ky) * mult + mouseY * (1 - mult)
+	yMin := (p.centy + p.ky) * mult + mouseY * (1 - mult)
+	p.kx = (xMin - xMax) / 2
+	p.ky = (yMin - yMax) / 2
+	p.centx = (xMin - p.kx)
+	p.centy = (yMin - p.ky)
+
+	p.sendPosition()
+}
+
+func (p *Parameters) sendPosition() {
+	p.position <- PositionParameters{
+		kx: p.kx,
+		ky: p.ky,
+		centx: p.centx,
+		centy: p.centy,
+	}
+}
+
+//TODO AW: add destroy method to close channel before exit
+func NewParameters() Parameters {
+	p := Parameters{
+		depth: 500,
+		zoom: 1,
+		rph: 4,
+		gph: 2,
+		bph: 1,
+		rfr: 0.15,
+		gfr: 0.15,
+		bfr: 0.10,
+		kx: 1.5,
+		ky: 1.2,
+		centx: -0.75,
+		centy: 0,
+		position: make(chan PositionParameters, 1),
+	}
+	p.sendPosition()
+	return p
 }
 
 type MandelbrotSet struct {
 	params Parameters
 	name string
-}
-
-func NewParameters() Parameters {
-	return Parameters{
-		depth: 100,
-		zoom: 1,
-		rph: 4,
-		gph: 4,
-		bph: 4,
-		rfr: 0.15,
-		gfr: 0.15,
-		bfr: 0.15,
-		kx: 1.5,
-		ky: 1.2,
-		centx: -0.75,
-		centy: 0,
-	}
+	pos PositionParameters
 }
 
 func New() *MandelbrotSet {
@@ -51,54 +94,98 @@ func New() *MandelbrotSet {
 	}
 }
 
-func (s *MandelbrotSet) ImageRender(w int, h int) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
+type Range struct {
+	Start int
+	End int
+}
 
+// split the image vertically by number
+// returns start-end limits for image parts to process in different goroutines
+func (s *MandelbrotSet) GetRanges(partsNum, width int) []Range {
+	limits := []Range{}
+	rangeSize := width / partsNum
+
+	for currentPart := 1; currentPart <= partsNum; currentPart++ {
+		nMinus := currentPart - 1
+		if nMinus == 0 {
+			limits = append(limits, Range{0, currentPart * rangeSize})
+			continue
+		}
+		if currentPart == partsNum {
+			limits = append(limits, Range{nMinus * rangeSize + 1, width})
+			continue
+		}
+		limits = append(limits, Range{nMinus * rangeSize + 1, currentPart * rangeSize})
+	}
+
+	return limits
+}
+
+func (s *MandelbrotSet) ImageRender(w int, h int) image.Image {
 	now := time.Now()
 
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			s.pixel(w, h, x, y, img)
-		}
+	select {
+	case s.pos = <-s.params.position:
+	default:
 	}
+
+	img := s.sequential(w, h)
+	// img := s.concurrent(w, h)
 
 	fmt.Println("time:", time.Since(now))
 	return img
 }
 
-//TODO AW: zoom should not be here...
-func (s *MandelbrotSet) Zoom(w, h, x, y, delta float32) {
-	var mult float64 = 1.1
-	if delta < 0 {
-		mult = 0.9
+func (s *MandelbrotSet) sequential(w int, h int) image.Image {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetRGBA(x, y, s.pixel(w, h, x, y))
+		}
 	}
 
-	s.params.zoom = s.params.zoom / mult
-	mouseX := float64(x / w) * (s.params.kx * 2) + s.params.centx - s.params.kx
-	mouseY := float64(y / h) * (s.params.ky * 2) + s.params.centy - s.params.ky
-	xMax := (s.params.centx - s.params.kx) * mult + mouseX * (1 - mult)
-	xMin := (s.params.centx + s.params.kx) * mult + mouseX * (1 - mult)
-	yMax := (s.params.centy - s.params.ky) * mult + mouseY * (1 - mult)
-	yMin := (s.params.centy + s.params.ky) * mult + mouseY * (1 - mult)
-	s.params.kx = (xMin - xMax) / 2
-	s.params.ky = (yMin - yMax) / 2
-	s.params.centx = (xMin - s.params.kx)
-	s.params.centy = (yMin - s.params.ky)
+	return img
 }
 
-func (s *MandelbrotSet) pixel(w, h, x, y int, img *image.RGBA) { //TODO AW: or it's better to return a value for pixel? check using benchmarks
+func (s *MandelbrotSet) concurrent(w int, h int) image.Image {
+	workersNum := runtime.NumCPU() * 3
+	wg := &sync.WaitGroup{}
+	wg.Add(workersNum)
+
+	ranges := s.GetRanges(workersNum, w)
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+
+	for _, pair := range ranges {
+		go func(start, end int) {
+			defer wg.Done()
+			for y := 0; y < h; y++ {
+				for x := start; x < end; x++ {
+					img.SetRGBA(x, y, s.pixel(w, h, x, y))
+				}
+			}
+		}(pair.Start, pair.End)
+	}
+
+	wg.Wait()
+	return img
+}
+
+func (s *MandelbrotSet) Zoom(w, h, x, y, delta float32) {
+	s.params.Zoom(w, h, x, y, delta)
+}
+
+func (s *MandelbrotSet) pixel(w, h, x, y int) color.RGBA {
 	p := ComplexPoint{
-		r: 0,
-		i: 0,
-		x: float64(x) / float64(w) * (s.params.kx * 2) + s.params.centx - s.params.kx,
-		y: float64(y) / float64(h) * (s.params.ky * 2) + s.params.centy - s.params.ky,
+		r: 0, // z
+		i: 0, // z
+		x: float64(x) / float64(w) * (s.pos.kx * 2) + s.pos.centx - s.pos.kx, // c
+		y: float64(y) / float64(h) * (s.pos.ky * 2) + s.pos.centy - s.pos.ky, // c
 	}
 
 	q := (p.x * p.x - 0.5 * p.x + 0.0625) + p.y * p.y
 	if s.checkMandelbrot(q, p) {
-		//TODO AW: check if using of img.Pix list is quicker (img.Pix[x + y * size.Width] = 0)
-		//TODO AW: since img.Pix is uint8 slice, the formula should account it
-		img.Set(x, y, color.Black)
+		return color.RGBA{0, 0, 0, 255}
 	} else {
 		sum := p.r * p.r + p.i * p.i
 		sub := p.r * p.r - p.i * p.i
@@ -113,9 +200,9 @@ func (s *MandelbrotSet) pixel(w, h, x, y int, img *image.RGBA) { //TODO AW: or i
 		}
 
 		if iter == s.params.depth {
-			img.Set(x, y, color.Black)
+			return color.RGBA{0, 0, 0, 255}
 		} else {
-			img.Set(x, y, s.getColor(s.ci(iter, p)))
+			return s.getColor(s.ci(iter, p))
 		}
 	}
 }
@@ -127,10 +214,7 @@ func (s *MandelbrotSet) checkMandelbrot(q float64, p ComplexPoint) bool {
 	return false
 }
 
-func (s *MandelbrotSet) getColor(n float64) color.Color {
-	if (n == float64(s.params.depth)) {
-		return color.Black
-	}
+func (s *MandelbrotSet) getColor(n float64) color.RGBA {
 	return color.RGBA{
 		R: uint8(math.Sin(n * s.params.rfr + s.params.rph) * 127 + 128),
 		G: uint8(math.Sin(n * s.params.gfr + s.params.gph) * 127 + 128),
@@ -139,6 +223,7 @@ func (s *MandelbrotSet) getColor(n float64) color.Color {
 	}
 }
 
+// a continuous iteration count
 func (s *MandelbrotSet) ci(iter int, p ComplexPoint) float64 {
 	return float64(iter) + 1 - (math.Log((math.Log(math.Sqrt(p.r * p.r + p.i * p.i)) / 2) / math.Log(2)) / math.Log(2))
 }
