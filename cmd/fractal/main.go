@@ -20,17 +20,18 @@ func main() {
 	w := a.NewWindow("Fractals")
 	w.SetMaster()
 	w.SetFixedSize(false)
-	w.Resize(fyne.NewSize(initialWidth, initialHeight))
 	setKeysBindings(w)
 	// w.SetMainMenu(makeMenu(a, w))
 
 	r := components.NewFractalRender(mandelbrot.New())
 	content := container.NewStack(r)
 	w.SetContent(content)
+	w.Resize(fyne.NewSize(initialWidth, initialHeight))
 
 	w.ShowAndRun()
 }
 
+//TODO AW: add binding to switch between sequential and concurrent logic
 func setKeysBindings(w fyne.Window) {
 	w.Canvas().AddShortcut(
 		&desktop.CustomShortcut{

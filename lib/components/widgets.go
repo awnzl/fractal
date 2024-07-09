@@ -23,7 +23,9 @@ func NewFractalRender(f fractal.Fractal) *FractalRender {
 }
 
 func (render *FractalRender) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(canvas.NewRaster(render.fractal.ImageRender))
+	raster := canvas.NewRaster(render.fractal.ImageRender)
+	raster.SetMinSize(fyne.Size{Width: 320, Height: 240})
+	return widget.NewSimpleRenderer(raster)
 }
 
 // Handle scroll events

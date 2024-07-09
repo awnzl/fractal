@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var workersNum = runtime.NumCPU() * 2
+
 type ComplexPoint struct {
 	r, i float64
 	x, y float64
@@ -77,7 +79,7 @@ func NewParameters() Parameters {
 		centy: 0,
 		position: make(chan PositionParameters, 1),
 	}
-	p.sendPosition()
+	p.sendPosition() // send initial params
 	return p
 }
 
@@ -85,12 +87,14 @@ type MandelbrotSet struct {
 	params Parameters
 	name string
 	pos PositionParameters
+	img *image.RGBA
 }
 
 func New() *MandelbrotSet {
 	return &MandelbrotSet{
 		params: NewParameters(),
 		name: "Mandelbrot set",
+		img: image.NewRGBA(image.Rect(0, 0, 0, 0)),
 	}
 }
 
@@ -99,76 +103,75 @@ type Range struct {
 	End int
 }
 
-// split the image vertically by number
-// returns start-end limits for image parts to process in different goroutines
+// splits the image vertically by number
+// returns start-end limits for image parts
 func (s *MandelbrotSet) GetRanges(partsNum, width int) []Range {
 	limits := []Range{}
-	rangeSize := width / partsNum
+	partSize := width / partsNum
 
 	for currentPart := 1; currentPart <= partsNum; currentPart++ {
-		nMinus := currentPart - 1
-		if nMinus == 0 {
-			limits = append(limits, Range{0, currentPart * rangeSize})
+		partEnd := currentPart * partSize
+		mult := currentPart - 1
+		if mult == 0 {
+			limits = append(limits, Range{0, partEnd})
 			continue
 		}
+
+		partStart := mult * partSize
 		if currentPart == partsNum {
-			limits = append(limits, Range{nMinus * rangeSize + 1, width})
+			limits = append(limits, Range{partStart, width}) // the last one part
 			continue
 		}
-		limits = append(limits, Range{nMinus * rangeSize + 1, currentPart * rangeSize})
+
+		limits = append(limits, Range{partStart, partEnd})
 	}
 
 	return limits
 }
 
 func (s *MandelbrotSet) ImageRender(w int, h int) image.Image {
+	if s.img.Rect.Max.X != w || s.img.Rect.Max.Y != h {
+		s.img = image.NewRGBA(image.Rect(0, 0, w, h))
+	}
+
 	now := time.Now()
 
 	select {
 	case s.pos = <-s.params.position:
-	default:
+	default: // window resize case
 	}
 
-	img := s.sequential(w, h)
-	// img := s.concurrent(w, h)
+	//s.sequential(w, h)
+	s.concurrent(w, h)
 
 	fmt.Println("time:", time.Since(now))
-	return img
+	return s.img
 }
 
-func (s *MandelbrotSet) sequential(w int, h int) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-
+func (s *MandelbrotSet) sequential(w int, h int) {
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			img.SetRGBA(x, y, s.pixel(w, h, x, y))
+			s.img.SetRGBA(x, y, s.pixel(w, h, x, y))
 		}
 	}
-
-	return img
 }
 
-func (s *MandelbrotSet) concurrent(w int, h int) image.Image {
-	workersNum := runtime.NumCPU() * 3
+func (s *MandelbrotSet) concurrent(w int, h int) {
 	wg := &sync.WaitGroup{}
 	wg.Add(workersNum)
 
-	ranges := s.GetRanges(workersNum, w)
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-
-	for _, pair := range ranges {
+	for _, pair := range s.GetRanges(workersNum, w) {
 		go func(start, end int) {
 			defer wg.Done()
 			for y := 0; y < h; y++ {
 				for x := start; x < end; x++ {
-					img.SetRGBA(x, y, s.pixel(w, h, x, y))
+					s.img.SetRGBA(x, y, s.pixel(w, h, x, y))
 				}
 			}
 		}(pair.Start, pair.End)
 	}
 
 	wg.Wait()
-	return img
 }
 
 func (s *MandelbrotSet) Zoom(w, h, x, y, delta float32) {
