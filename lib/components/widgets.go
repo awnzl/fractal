@@ -1,19 +1,24 @@
 package components
 
 import (
-	"github.com/awnzl/fractal/lib/fractal"
+	"image"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/widget"
 )
 
-type FractalRender struct {
-	widget.BaseWidget
-	fractal fractal.Fractal
+type Fractal interface {
+	ImageRender(w int, h int) image.Image
+	Zoom(w, h, x, y, delta float32) //TODO AW: zoom is the same for any fractal, move it from here
 }
 
-func NewFractalRender(f fractal.Fractal) *FractalRender {
+type FractalRender struct {
+	widget.BaseWidget
+	fractal Fractal
+}
+
+func NewFractalRender(f Fractal) *FractalRender {
 	render := &FractalRender{
 		fractal: f,
 	}

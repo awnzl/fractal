@@ -25,4 +25,5 @@ test:
 
 .PHONY: clean
 clean:
-	rm -rf $(GOBIN)/$(BINARY_NAME)
+	rm -rf $(GOBIN)
+

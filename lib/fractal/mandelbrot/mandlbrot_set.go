@@ -141,6 +141,9 @@ func (s *MandelbrotSet) ImageRender(w int, h int) image.Image {
 	default: // window resize case
 	}
 
+	//TODO AW: add keys to switch between sequential and concurrent approaches
+	//TODO AW: bind few predefined scene positions to some keys to compare rendering time for these two approaches
+
 	//s.sequential(w, h)
 	s.concurrent(w, h)
 
